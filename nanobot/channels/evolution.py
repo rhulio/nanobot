@@ -187,7 +187,15 @@ class EvolutionChannel(BaseChannel):
                         if isinstance(data, list):
                             messages = data
                         elif isinstance(data, dict):
-                            messages = data.get("messages", [])
+                            raw = data.get("messages", data)
+                            # Evolution may return {"messages": {"records": [...], "total": N}}
+                            if isinstance(raw, dict):
+                                messages = raw.get("records", [])
+                            elif isinstance(raw, list):
+                                messages = raw
+                            else:
+                                logger.debug(f"Evolution findMessages unexpected messages field: {raw!r}")
+                                continue
                         else:
                             logger.debug(f"Evolution findMessages unexpected response: {data!r}")
                             continue
@@ -196,6 +204,8 @@ class EvolutionChannel(BaseChannel):
 
                 new_ts = since_ts
                 for msg_data in messages:
+                    if not isinstance(msg_data, dict):
+                        continue
                     ts = int(msg_data.get("messageTimestamp", 0))
                     if ts <= since_ts:
                         continue
