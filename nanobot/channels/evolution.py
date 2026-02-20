@@ -194,9 +194,11 @@ class EvolutionChannel(BaseChannel):
                 try:
                     async with session.post(url, headers=headers, json=payload) as resp:
                         if resp.status >= 400:
-                            logger.debug(f"Evolution findMessages {resp.status} for {jid}")
+                            body = await resp.text()
+                            logger.debug(f"Evolution findMessages {resp.status} for {jid}: {body[:200]}")
                             continue
                         data = await resp.json()
+                        logger.debug(f"Evolution findMessages raw response type={type(data).__name__}: {str(data)[:300]}")
                         if isinstance(data, list):
                             messages = data
                         elif isinstance(data, dict):
@@ -212,8 +214,11 @@ class EvolutionChannel(BaseChannel):
                         else:
                             logger.debug(f"Evolution findMessages unexpected response: {data!r}")
                             continue
-                except Exception:
+                except Exception as exc:
+                    logger.debug(f"Evolution findMessages exception for {jid}: {exc}")
                     continue
+
+                logger.debug(f"Evolution {instance_name}/{jid}: {len(messages)} msgs, since_ts={since_ts}")
 
                 new_ts = since_ts
                 for msg_data in messages:
@@ -221,6 +226,7 @@ class EvolutionChannel(BaseChannel):
                         continue
                     ts = int(msg_data.get("messageTimestamp", 0))
                     if ts <= since_ts:
+                        logger.debug(f"Evolution skipping msg ts={ts} <= since_ts={since_ts}")
                         continue
                     if ts > new_ts:
                         new_ts = ts
