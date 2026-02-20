@@ -14,6 +14,9 @@ RUN apt-get update && \
 
 WORKDIR /app
 
+# Instalação isolada das ferramentas CLI CalDAV (vdirsyncer e khal)
+RUN uv pip install --system --no-cache vdirsyncer khal
+
 # Install Python dependencies first (cached layer)
 COPY pyproject.toml README.md LICENSE ./
 RUN mkdir -p nanobot bridge && touch nanobot/__init__.py && \
