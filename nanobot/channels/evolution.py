@@ -1,7 +1,9 @@
-"""Evolution API channel implementation using webhook."""
+"""Evolution API channel implementation — webhook or polling mode."""
 
 import asyncio
 import os
+import time
+from typing import Any
 from aiohttp import web
 from loguru import logger
 
@@ -21,6 +23,11 @@ def _guess_mediatype(url: str) -> str:
     if any(lower.endswith(ext) for ext in (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip")):
         return "document"
     return "image"  # default
+
+
+def _initial_lookback(seen: dict[str, int], jid: str) -> int:
+    """Seconds to look back on first poll for a JID (skip old history)."""
+    return 0 if jid in seen else 60  # only fetch last 60s on first encounter
 
 
 class EvolutionChannel(BaseChannel):
@@ -77,10 +84,8 @@ class EvolutionChannel(BaseChannel):
         return any(self._phones_match(sender_id, entry) for entry in allow_list)
 
     async def start(self) -> None:
-        """Start the Evolution webhook server."""
-        port = self.config.port or 18791
-
-        # Expose credentials as env vars so the evolution-api skill curl commands work
+        """Start in webhook or polling mode depending on config."""
+        # Resolve and expose credentials as env vars
         default_instance = self.config.default_instance or next(iter(self._instances), "")
         instance_cfg = self._instances.get(default_instance, {})
         api_url = instance_cfg.get("api_url") or instance_cfg.get("apiUrl") or self.config.api_url
@@ -91,6 +96,15 @@ class EvolutionChannel(BaseChannel):
             os.environ.setdefault("EVOLUTION_API_KEY", api_key)
         if default_instance:
             os.environ.setdefault("EVOLUTION_API_INSTANCE", default_instance)
+
+        if self.config.mode == "polling":
+            await self._start_polling()
+        else:
+            await self._start_webhook()
+
+    async def _start_webhook(self) -> None:
+        """Start the Evolution webhook server."""
+        port = self.config.port or 18791
 
         self._app = web.Application()
 
@@ -110,18 +124,184 @@ class EvolutionChannel(BaseChannel):
         self._running = True
         logger.info(f"Evolution API webhook server started on port {port} — POST /webhook/evolution")
 
-        # Keep running
         while self._running:
             await asyncio.sleep(1)
+
+    async def _start_polling(self) -> None:
+        """Poll Evolution API periodically for new messages."""
+        interval = self.config.poll_interval or 5
+        self._running = True
+        logger.info(f"Evolution API polling started (interval={interval}s)")
+
+        # seen[instance_name][jid] = last messageTimestamp processed
+        seen: dict[str, dict[str, int]] = {}
+
+        while self._running:
+            for instance_name, instance_config in self._instances.items():
+                try:
+                    await self._poll_instance(instance_name, instance_config, seen.setdefault(instance_name, {}))
+                except Exception as e:
+                    logger.error(f"Evolution poll error for instance {instance_name}: {e}")
+            await asyncio.sleep(interval)
+
+    async def _poll_instance(
+        self,
+        instance_name: str,
+        instance_config: dict[str, Any],
+        seen: dict[str, int],
+    ) -> None:
+        """Fetch and dispatch new messages for one instance."""
+        import aiohttp
+
+        api_url = (
+            instance_config.get("api_url") or instance_config.get("apiUrl")
+            or self.config.api_url or os.getenv("EVOLUTION_API_URL", "")
+        )
+        api_key = (
+            instance_config.get("api_key") or instance_config.get("apiKey")
+            or self.config.api_key or os.getenv("EVOLUTION_API_KEY", "")
+        )
+        if not api_url or not api_key:
+            return
+
+        headers = {"apikey": api_key, "Content-Type": "application/json"}
+        allowlist = instance_config.get("allow_from", self.config.allow_from)
+
+        async with aiohttp.ClientSession() as session:
+            # Get JIDs to poll: allowlist JIDs + recently active chats
+            jids = await self._get_poll_jids(session, api_url, api_key, instance_name, allowlist)
+
+            for jid in jids:
+                since_ts = seen.get(jid, int(time.time()) - _initial_lookback(seen, jid))
+                url = f"{api_url}/chat/findMessages/{instance_name}"
+                payload = {
+                    "where": {"key": {"remoteJid": jid}, "fromMe": False},
+                    "limit": 50,
+                }
+                try:
+                    async with session.post(url, headers=headers, json=payload) as resp:
+                        if resp.status >= 400:
+                            continue
+                        data = await resp.json()
+                        messages = data if isinstance(data, list) else data.get("messages", [])
+                except Exception:
+                    continue
+
+                new_ts = since_ts
+                for msg_data in messages:
+                    ts = int(msg_data.get("messageTimestamp", 0))
+                    if ts <= since_ts:
+                        continue
+                    if ts > new_ts:
+                        new_ts = ts
+                    await self._dispatch_polled_message(msg_data, instance_name, allowlist)
+
+                if new_ts > since_ts:
+                    seen[jid] = new_ts
+
+    async def _get_poll_jids(
+        self,
+        session: Any,
+        api_url: str,
+        api_key: str,
+        instance_name: str,
+        allowlist: list[str],
+    ) -> list[str]:
+        """Return list of JIDs to poll. Uses allowlist when set, otherwise recent chats."""
+        if allowlist:
+            jids = []
+            for number in allowlist:
+                d = "".join(filter(str.isdigit, number))
+                if not d.startswith("55"):
+                    d = "55" + d
+                jids.append(f"{d}@s.whatsapp.net")
+            return jids
+
+        # No allowlist — fetch recently active chats
+        try:
+            url = f"{api_url}/chat/findChats/{instance_name}"
+            async with session.get(url, headers={"apikey": api_key}) as resp:
+                if resp.status >= 400:
+                    return []
+                chats = await resp.json()
+                if not isinstance(chats, list):
+                    return []
+                return [c["id"] for c in chats[:50] if "id" in c]
+        except Exception:
+            return []
+
+    async def _dispatch_polled_message(
+        self,
+        msg_data: dict[str, Any],
+        instance_name: str,
+        allowlist: list[str],
+    ) -> None:
+        """Parse a polled message dict and forward to the message bus."""
+        key = msg_data.get("key", {})
+        if key.get("fromMe", False):
+            return
+
+        remote_jid = key.get("remoteJid", "")
+        participant = key.get("participant", "")
+
+        if not remote_jid:
+            return
+
+        if "@s.whatsapp.net" in remote_jid:
+            sender_id = remote_jid.split("@")[0]
+        elif "@g.us" in remote_jid:
+            sender_id = participant.split("@")[0] if participant else remote_jid.split("@")[0]
+        else:
+            sender_id = remote_jid
+
+        if allowlist and not any(self._phones_match(sender_id, e) for e in allowlist):
+            return
+
+        sender_id = self._normalize_phone(sender_id) or sender_id
+
+        msg_type = msg_data.get("message", {})
+        if "conversation" in msg_type:
+            content = msg_type["conversation"]
+        elif "extendedTextMessage" in msg_type:
+            content = msg_type["extendedTextMessage"].get("text", "")
+        elif "imageMessage" in msg_type:
+            content = msg_type["imageMessage"].get("caption", "[Image]")
+        elif "videoMessage" in msg_type:
+            content = msg_type["videoMessage"].get("caption", "[Video]")
+        elif "documentMessage" in msg_type:
+            content = msg_type["documentMessage"].get("caption", "[Document]")
+        elif "audioMessage" in msg_type:
+            content = "[Audio]"
+        elif "stickerMessage" in msg_type:
+            content = "[Sticker]"
+        elif not msg_type:
+            return
+        else:
+            content = str(msg_type)
+
+        logger.info(f"Evolution polled message from {sender_id}: {content[:50]}...")
+
+        await self._handle_message(
+            sender_id=sender_id,
+            chat_id=remote_jid,
+            content=content,
+            metadata={
+                "message_id": key.get("id", ""),
+                "instance_name": instance_name,
+                "timestamp": msg_data.get("messageTimestamp", ""),
+                "push_name": msg_data.get("pushName", ""),
+                "is_group": "@g.us" in remote_jid,
+            },
+        )
     
     async def stop(self) -> None:
-        """Stop the Evolution webhook server."""
+        """Stop the Evolution channel."""
         self._running = False
-        
+
         if self._runner:
             await self._runner.cleanup()
-        
-        logger.info("Evolution API webhook server stopped")
+
+        logger.info("Evolution API channel stopped")
     
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Evolution API (text, media, sticker, or reaction)."""

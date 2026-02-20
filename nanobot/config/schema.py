@@ -169,7 +169,9 @@ class EvolutionConfig(Base):
     """Evolution API channel configuration using webhook."""
 
     enabled: bool = False
-    port: int = 18791  # Webhook port
+    mode: str = "webhook"  # "webhook" or "polling"
+    port: int = 18791  # Webhook server port (only used in webhook mode)
+    poll_interval: int = 5  # Seconds between polls (only used in polling mode)
     allow_from: list[str] = Field(default_factory=list)  # Allowed phone numbers
     instances: dict[str, dict] = Field(default_factory=dict)  # Multiple instances support
     api_url: str = ""  # Default API URL (used when instance has none)
