@@ -8,21 +8,6 @@ x-common-config: &common-config
     - ~/.local:/root/.local
     - ~/.cache:/root/.cache
 services:
-services:
-  nanobot-webhook:
-    container_name: nanobot-webhook
-    build:
-      context: .
-      dockerfile: Dockerfile
-    volumes:
-      - '~/.nanobot:/root/.nanobot'
-      - '~/.config:/root/.config'
-      - '~/.local:/root/.local'
-      - '~/.cache:/root/.cache'
-    entrypoint: ["python3"]
-    command: ["/root/.nanobot/workspace/evolution-webhook.py"]
-    restart: unless-stopped
-
   nanobot-gateway:
     container_name: nanobot-gateway
     build:
