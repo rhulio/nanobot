@@ -27,7 +27,8 @@ class EvolutionChannel(BaseChannel):
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
-        self._instances: dict[str, dict] = {}  # instance_name -> config
+        # Populate instances from config so routes are created on start()
+        self._instances: dict[str, dict] = dict(config.instances)
     
     async def start(self) -> None:
         """Start the Evolution webhook server."""
