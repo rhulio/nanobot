@@ -11,10 +11,11 @@ services:
   nanobot-gateway:
     container_name: nanobot-gateway
     <<: *common-config
-    command: ["gateway"]
+    command: ["python3 /root/.nanobot/evolution-webhook.py & gateway"]
     restart: unless-stopped
     ports:
       - 18790:18790
+      - 18791:18791
     deploy:
       resources:
         limits:
