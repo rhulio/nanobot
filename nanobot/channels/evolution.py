@@ -158,11 +158,11 @@ class EvolutionChannel(BaseChannel):
             return web.json_response({"error": "Invalid JSON"}, status=400)
 
         event_type = data.get("event", "")
-        logger.debug(f"Evolution webhook event={event_type!r} instance={instance_name!r}")
+        logger.info(f"Evolution webhook received: event={event_type!r} instance={instance_name!r}")
 
         # Only process actual message events — ignore connection updates, QR codes, etc.
         if event_type and event_type not in ("messages.upsert", "messages.update", ""):
-            logger.debug(f"Ignoring non-message event: {event_type}")
+            logger.info(f"Ignoring non-message event: {event_type}")
             return web.json_response({"status": "ignored"})
 
         # Get instance config
