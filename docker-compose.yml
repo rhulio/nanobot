@@ -8,14 +8,35 @@ x-common-config: &common-config
     - ~/.local:/root/.local
     - ~/.nanobot:/root/.nanobot
 services:
+services:
+  nanobot-webhook:
+    container_name: nanobot-webhook
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - '~/.nanobot:/root/.nanobot'
+      - '~/.config:/root/.config'
+      - '~/.local:/root/.local'
+    entrypoint: ["python3"]
+    command: ["/root/.nanobot/evolution-webhook.py"]
+    restart: unless-stopped
+
   nanobot-gateway:
     container_name: nanobot-gateway
-    <<: *common-config
-    command: ["python3 /root/.nanobot/evolution-webhook.py & gateway"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - '~/.nanobot:/root/.nanobot'
+      - '~/.config:/root/.config'
+      - '~/.local:/root/.local'
+    command:
+      - gateway
     restart: unless-stopped
     ports:
-      - 18790:18790
-      - 18791:18791
+      - '18790:18790'
+      - '18791:18791'
     deploy:
       resources:
         limits:
