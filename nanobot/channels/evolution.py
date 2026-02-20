@@ -170,8 +170,15 @@ class EvolutionChannel(BaseChannel):
         allowlist = instance_config.get("allow_from", self.config.allow_from)
 
         try:
-            # Extract message data
-            msg_data = data.get("data", {})
+            # Extract message data — Evolution v2 wraps in array, v1 sends object directly
+            raw_data = data.get("data", {})
+            if isinstance(raw_data, list):
+                msg_data = raw_data[0] if raw_data else {}
+            else:
+                msg_data = raw_data
+
+            logger.info(f"Evolution msg_data keys: {list(msg_data.keys()) if isinstance(msg_data, dict) else type(msg_data).__name__}")
+
             key = msg_data.get("key", {})
 
             # Get sender info - handle different formats
