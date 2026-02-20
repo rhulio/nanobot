@@ -181,9 +181,16 @@ class EvolutionChannel(BaseChannel):
                 try:
                     async with session.post(url, headers=headers, json=payload) as resp:
                         if resp.status >= 400:
+                            logger.debug(f"Evolution findMessages {resp.status} for {jid}")
                             continue
                         data = await resp.json()
-                        messages = data if isinstance(data, list) else data.get("messages", [])
+                        if isinstance(data, list):
+                            messages = data
+                        elif isinstance(data, dict):
+                            messages = data.get("messages", [])
+                        else:
+                            logger.debug(f"Evolution findMessages unexpected response: {data!r}")
+                            continue
                 except Exception:
                     continue
 
