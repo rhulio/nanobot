@@ -177,11 +177,27 @@ class EvolutionChannel(BaseChannel):
             sender_id = participant.split("@")[0] if participant else remote_jid.split("@")[0]
         else:
             sender_id = remote_jid
-        
-        # Check allowlist
-        if allowlist and sender_id not in allowlist:
-            logger.warning(f"Blocked message from {sender_id} - not in allowlist")
-            return web.json_response({"status": "blocked"})
+
+        # Normalize sender_id: keep only digits then strip leading country code 55 (Brazil)
+        # so "5586981771234" matches allowlist entry "86981771234"
+        sender_digits = "".join(filter(str.isdigit, sender_id))
+        if sender_digits.startswith("55") and len(sender_digits) > 12:
+            sender_normalized = sender_digits[2:]
+        else:
+            sender_normalized = sender_digits
+
+        # Check allowlist — accept if sender_id, full digits or normalized form matches
+        if allowlist:
+            def _allowed(s: str) -> bool:
+                s_digits = "".join(filter(str.isdigit, s))
+                return s in (sender_id, sender_digits, sender_normalized) or s_digits in (sender_digits, sender_normalized)
+
+            if not any(_allowed(entry) for entry in allowlist):
+                logger.warning(f"Blocked message from {sender_id} ({sender_normalized}) - not in allowlist")
+                return web.json_response({"status": "blocked"})
+
+        # Use normalized form as sender_id for consistent session/allowlist keys
+        sender_id = sender_normalized or sender_id
         
         # Get message content
         msg_type = msg_data.get("message", {})
