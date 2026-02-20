@@ -172,6 +172,9 @@ class EvolutionConfig(Base):
     port: int = 18791  # Webhook port
     allow_from: list[str] = Field(default_factory=list)  # Allowed phone numbers
     instances: dict[str, dict] = Field(default_factory=dict)  # Multiple instances support
+    api_url: str = ""  # Default API URL (used when instance has none)
+    api_key: str = ""  # Default API key (used when instance has none)
+    default_instance: str = ""  # Default instance name for outbound messages
 
 
 class ChannelsConfig(Base):

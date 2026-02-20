@@ -36,17 +36,10 @@ class EvolutionChannel(BaseChannel):
         
         self._app = web.Application()
         
-        # Add routes for each instance
-        for instance_name, instance_config in self._instances.items():
-            self._app.router.add_post(
-                f"/webhook/{instance_name}",
-                lambda req, inst=instance_name: self._handle_webhook(req, inst)
-            )
-            self._app.router.add_get(
-                f"/health/{instance_name}",
-                lambda req, inst=instance_name: self._health_check(req, inst)
-            )
-        
+        # Fixed webhook route — Evolution API must be configured to POST to /webhook/evolution
+        self._app.router.add_post("/webhook/evolution", self._handle_webhook_fixed)
+        self._app.router.add_get("/health/evolution", self._health_check_fixed)
+
         # Health check general
         self._app.router.add_get("/health", self._health_check_general)
         
@@ -57,7 +50,7 @@ class EvolutionChannel(BaseChannel):
         await self._site.start()
         
         self._running = True
-        logger.info(f"Evolution API webhook server started on port {port}")
+        logger.info(f"Evolution API webhook server started on port {port} — POST /webhook/evolution")
         
         # Keep running
         while self._running:
@@ -77,12 +70,13 @@ class EvolutionChannel(BaseChannel):
         import aiohttp
         
         # Get instance from metadata or use default
-        instance_name = msg.metadata.get("instance_name", "rhulio-profissional")
+        default_instance = self.config.default_instance or next(iter(self._instances), "")
+        instance_name = msg.metadata.get("instance_name", default_instance)
         
-        # Get instance config
+        # Get instance config — fall back to top-level api_url/api_key then env vars
         instance_config = self._instances.get(instance_name, {})
-        api_url = instance_config.get("api_url", os.getenv("EVOLUTION_API_URL", ""))
-        api_key = instance_config.get("api_key", os.getenv("EVOLUTION_API_KEY", ""))
+        api_url = instance_config.get("api_url") or instance_config.get("apiUrl") or self.config.api_url or os.getenv("EVOLUTION_API_URL", "")
+        api_key = instance_config.get("api_key") or instance_config.get("apiKey") or self.config.api_key or os.getenv("EVOLUTION_API_KEY", "")
         
         if not api_url or not api_key:
             logger.error(f"Evolution API not configured for instance {instance_name}")
@@ -120,6 +114,26 @@ class EvolutionChannel(BaseChannel):
         except Exception as e:
             logger.error(f"Error sending via Evolution API: {e}")
     
+    async def _health_check_fixed(self, request: web.Request) -> web.Response:
+        """Health check for the fixed /health/evolution route."""
+        instance_name = self.config.default_instance or next(iter(self._instances), "evolution")
+        return await self._health_check(request, instance_name)
+
+    async def _handle_webhook_fixed(self, request: web.Request) -> web.Response:
+        """Handle webhook on the fixed /webhook/evolution route."""
+        instance_name = self.config.default_instance or next(iter(self._instances), "evolution")
+        return await self._handle_webhook(request, instance_name)
+
+    async def _health_check_dynamic(self, request: web.Request) -> web.Response:
+        """Health check for any instance (catch-all route)."""
+        instance_name = request.match_info["instance_name"]
+        return await self._health_check(request, instance_name)
+
+    async def _handle_webhook_dynamic(self, request: web.Request) -> web.Response:
+        """Handle webhook for any instance (catch-all route)."""
+        instance_name = request.match_info["instance_name"]
+        return await self._handle_webhook(request, instance_name)
+
     async def _health_check(self, request: web.Request, instance_name: str) -> web.Response:
         """Health check for specific instance."""
         return web.json_response({
