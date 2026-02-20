@@ -156,102 +156,125 @@ class EvolutionChannel(BaseChannel):
         except Exception as e:
             logger.error(f"Failed to parse webhook data: {e}")
             return web.json_response({"error": "Invalid JSON"}, status=400)
-        
+
+        event_type = data.get("event", "")
+        logger.debug(f"Evolution webhook event={event_type!r} instance={instance_name!r}")
+
+        # Only process actual message events — ignore connection updates, QR codes, etc.
+        if event_type and event_type not in ("messages.upsert", "messages.update", ""):
+            logger.debug(f"Ignoring non-message event: {event_type}")
+            return web.json_response({"status": "ignored"})
+
         # Get instance config
         instance_config = self._instances.get(instance_name, {})
         allowlist = instance_config.get("allow_from", self.config.allow_from)
-        
-        # Extract message data
-        msg_data = data.get("data", {})
-        key = msg_data.get("key", {})
-        
-        # Get sender info - handle different formats
-        remote_jid = key.get("remoteJid", "")
-        participant = key.get("participant", "")
-        
-        # Extract phone number from JID
-        if "@s.whatsapp.net" in remote_jid:
-            sender_id = remote_jid.split("@")[0]
-        elif "@g.us" in remote_jid:
-            # Group message
-            sender_id = participant.split("@")[0] if participant else remote_jid.split("@")[0]
-        else:
-            sender_id = remote_jid
 
-        def _normalize_br(number: str) -> str:
-            """Strip country code and return digits only."""
-            d = "".join(filter(str.isdigit, number))
-            if d.startswith("55") and len(d) >= 12:
-                d = d[2:]
-            return d
+        try:
+            # Extract message data
+            msg_data = data.get("data", {})
+            key = msg_data.get("key", {})
 
-        def _phones_match(a: str, b: str) -> bool:
-            """
-            Compare two phone numbers tolerantly:
-            - ignores country code 55
-            - ignores the 9th mobile digit (BR transition: 8-digit → 9-digit locals)
-            """
-            na, nb = _normalize_br(a), _normalize_br(b)
-            if na == nb:
-                return True
-            # Both must have at least DDD (2 digits) + local
-            if len(na) >= 10 and len(nb) >= 10:
-                local_a, local_b = na[2:], nb[2:]
-                if local_a.startswith("9") and local_a[1:] == local_b:
+            # Get sender info - handle different formats
+            remote_jid = key.get("remoteJid", "")
+            participant = key.get("participant", "")
+
+            if not remote_jid:
+                logger.debug(f"Ignoring event with no remoteJid: {event_type!r}")
+                return web.json_response({"status": "ignored"})
+
+            # Ignore messages sent by the bot itself
+            if key.get("fromMe", False):
+                return web.json_response({"status": "ignored"})
+
+            # Extract phone number from JID
+            if "@s.whatsapp.net" in remote_jid:
+                sender_id = remote_jid.split("@")[0]
+            elif "@g.us" in remote_jid:
+                # Group message
+                sender_id = participant.split("@")[0] if participant else remote_jid.split("@")[0]
+            else:
+                sender_id = remote_jid
+
+            def _normalize_br(number: str) -> str:
+                """Strip country code and return digits only."""
+                d = "".join(filter(str.isdigit, number))
+                if d.startswith("55") and len(d) >= 12:
+                    d = d[2:]
+                return d
+
+            def _phones_match(a: str, b: str) -> bool:
+                """
+                Compare two phone numbers tolerantly:
+                - ignores country code 55
+                - ignores the 9th mobile digit (BR transition: 8-digit → 9-digit locals)
+                """
+                na, nb = _normalize_br(a), _normalize_br(b)
+                if na == nb:
                     return True
-                if local_b.startswith("9") and local_b[1:] == local_a:
-                    return True
-            return False
+                # Both must have at least DDD (2 digits) + local
+                if len(na) >= 10 and len(nb) >= 10:
+                    local_a, local_b = na[2:], nb[2:]
+                    if local_a.startswith("9") and local_a[1:] == local_b:
+                        return True
+                    if local_b.startswith("9") and local_b[1:] == local_a:
+                        return True
+                return False
 
-        sender_normalized = _normalize_br(sender_id)
+            sender_normalized = _normalize_br(sender_id)
 
-        # Check allowlist
-        if allowlist and not any(_phones_match(sender_id, entry) for entry in allowlist):
-            logger.warning(f"Blocked message from {sender_id} ({sender_normalized}) - not in allowlist")
-            return web.json_response({"status": "blocked"})
+            # Check allowlist
+            if allowlist and not any(_phones_match(sender_id, entry) for entry in allowlist):
+                logger.warning(f"Blocked message from {sender_id} ({sender_normalized}) - not in allowlist")
+                return web.json_response({"status": "blocked"})
 
-        # Use normalized form as sender_id for consistent session/allowlist keys
-        sender_id = sender_normalized or sender_id
-        
-        # Get message content
-        msg_type = msg_data.get("message", {})
-        
-        if "conversation" in msg_type:
-            content = msg_type["conversation"]
-        elif "extendedTextMessage" in msg_type:
-            content = msg_type["extendedTextMessage"].get("text", "")
-        elif "imageMessage" in msg_type:
-            content = msg_type["imageMessage"].get("caption", "[Image]")
-        elif "videoMessage" in msg_type:
-            content = msg_type["videoMessage"].get("caption", "[Video]")
-        elif "documentMessage" in msg_type:
-            content = msg_type["documentMessage"].get("caption", "[Document]")
-        elif "audioMessage" in msg_type:
-            content = "[Audio]"
-        elif "stickerMessage" in msg_type:
-            content = "[Sticker]"
-        else:
-            content = str(msg_type)
-        
-        # Build chat_id for replies (use full JID)
-        chat_id = remote_jid
-        
-        logger.info(f"Evolution message from {sender_id}: {content[:50]}...")
-        
-        # Forward to message bus
-        await self._handle_message(
-            sender_id=sender_id,
-            chat_id=chat_id,
-            content=content,
-            metadata={
-                "message_id": key.get("id", ""),
-                "instance_name": instance_name,
-                "timestamp": msg_data.get("messageTimestamp", ""),
-                "push_name": msg_data.get("pushName", ""),
-                "is_group": "@g.us" in remote_jid
-            }
-        )
-        
+            # Use normalized form as sender_id for consistent session/allowlist keys
+            sender_id = sender_normalized or sender_id
+
+            # Get message content
+            msg_type = msg_data.get("message", {})
+
+            if "conversation" in msg_type:
+                content = msg_type["conversation"]
+            elif "extendedTextMessage" in msg_type:
+                content = msg_type["extendedTextMessage"].get("text", "")
+            elif "imageMessage" in msg_type:
+                content = msg_type["imageMessage"].get("caption", "[Image]")
+            elif "videoMessage" in msg_type:
+                content = msg_type["videoMessage"].get("caption", "[Video]")
+            elif "documentMessage" in msg_type:
+                content = msg_type["documentMessage"].get("caption", "[Document]")
+            elif "audioMessage" in msg_type:
+                content = "[Audio]"
+            elif "stickerMessage" in msg_type:
+                content = "[Sticker]"
+            elif not msg_type:
+                logger.debug("Ignoring event with empty message payload")
+                return web.json_response({"status": "ignored"})
+            else:
+                content = str(msg_type)
+
+            # Build chat_id for replies (use full JID)
+            chat_id = remote_jid
+
+            logger.info(f"Evolution message from {sender_id}: {content[:50]}...")
+
+            # Forward to message bus
+            await self._handle_message(
+                sender_id=sender_id,
+                chat_id=chat_id,
+                content=content,
+                metadata={
+                    "message_id": key.get("id", ""),
+                    "instance_name": instance_name,
+                    "timestamp": msg_data.get("messageTimestamp", ""),
+                    "push_name": msg_data.get("pushName", ""),
+                    "is_group": "@g.us" in remote_jid
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Error processing Evolution webhook: {e}", exc_info=True)
+
         return web.json_response({"status": "ok"})
     
     def add_instance(self, instance_name: str, api_url: str, api_key: str, allow_from: list[str] | None = None) -> None:
