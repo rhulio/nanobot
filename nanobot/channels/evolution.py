@@ -188,7 +188,11 @@ class EvolutionChannel(BaseChannel):
                 since_ts = seen.get(jid, int(time.time()) - _initial_lookback(seen, jid))
                 url = f"{api_url}/chat/findMessages/{instance_name}"
                 payload = {
-                    "where": {"key": {"remoteJid": jid}, "fromMe": False},
+                    "where": {
+                        "key": {"remoteJid": jid},
+                        "messageTimestamp": {"gte": since_ts},
+                    },
+                    "orderBy": {"messageTimestamp": "asc"},
                     "limit": 50,
                 }
                 try:
