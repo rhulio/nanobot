@@ -17,7 +17,7 @@ WORKDIR /app
 # Instalação isolada das ferramentas CLI CalDAV (vdirsyncer e khal)
 RUN uv pip install --system --no-cache \
     vdirsyncer khal \
-    flask requests
+    flask requests aiohttp
 
 # Install Python dependencies first (cached layer)
 COPY pyproject.toml README.md LICENSE ./
