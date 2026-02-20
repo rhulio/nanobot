@@ -136,6 +136,17 @@ class ChannelManager:
                 logger.info("QQ channel enabled")
             except ImportError as e:
                 logger.warning("QQ channel not available: {}", e)
+        
+        # Evolution API channel
+        if self.config.channels.evolution.enabled:
+            try:
+                from nanobot.channels.evolution import EvolutionChannel
+                self.channels["evolution"] = EvolutionChannel(
+                    self.config.channels.evolution, self.bus
+                )
+                logger.info("Evolution API channel enabled")
+            except ImportError as e:
+                logger.warning("Evolution channel not available: {}", e)
     
     async def _start_channel(self, name: str, channel: BaseChannel) -> None:
         """Start a channel and log any exceptions."""
