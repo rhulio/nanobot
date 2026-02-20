@@ -18,6 +18,7 @@ WORKDIR /app
 RUN uv pip install --system --no-cache \
     vdirsyncer khal \
     flask requests aiohttp
+RUN apt-get update && apt-get install -y gh
 
 # Install Python dependencies first (cached layer)
 COPY pyproject.toml README.md LICENSE ./
