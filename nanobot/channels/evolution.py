@@ -178,23 +178,37 @@ class EvolutionChannel(BaseChannel):
         else:
             sender_id = remote_jid
 
-        # Normalize sender_id: keep only digits then strip leading country code 55 (Brazil)
-        # so "5586981771234" matches allowlist entry "86981771234"
-        sender_digits = "".join(filter(str.isdigit, sender_id))
-        if sender_digits.startswith("55") and len(sender_digits) > 12:
-            sender_normalized = sender_digits[2:]
-        else:
-            sender_normalized = sender_digits
+        def _normalize_br(number: str) -> str:
+            """Strip country code and return digits only."""
+            d = "".join(filter(str.isdigit, number))
+            if d.startswith("55") and len(d) >= 12:
+                d = d[2:]
+            return d
 
-        # Check allowlist — accept if sender_id, full digits or normalized form matches
-        if allowlist:
-            def _allowed(s: str) -> bool:
-                s_digits = "".join(filter(str.isdigit, s))
-                return s in (sender_id, sender_digits, sender_normalized) or s_digits in (sender_digits, sender_normalized)
+        def _phones_match(a: str, b: str) -> bool:
+            """
+            Compare two phone numbers tolerantly:
+            - ignores country code 55
+            - ignores the 9th mobile digit (BR transition: 8-digit → 9-digit locals)
+            """
+            na, nb = _normalize_br(a), _normalize_br(b)
+            if na == nb:
+                return True
+            # Both must have at least DDD (2 digits) + local
+            if len(na) >= 10 and len(nb) >= 10:
+                local_a, local_b = na[2:], nb[2:]
+                if local_a.startswith("9") and local_a[1:] == local_b:
+                    return True
+                if local_b.startswith("9") and local_b[1:] == local_a:
+                    return True
+            return False
 
-            if not any(_allowed(entry) for entry in allowlist):
-                logger.warning(f"Blocked message from {sender_id} ({sender_normalized}) - not in allowlist")
-                return web.json_response({"status": "blocked"})
+        sender_normalized = _normalize_br(sender_id)
+
+        # Check allowlist
+        if allowlist and not any(_phones_match(sender_id, entry) for entry in allowlist):
+            logger.warning(f"Blocked message from {sender_id} ({sender_normalized}) - not in allowlist")
+            return web.json_response({"status": "blocked"})
 
         # Use normalized form as sender_id for consistent session/allowlist keys
         sender_id = sender_normalized or sender_id
