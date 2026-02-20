@@ -19,7 +19,7 @@ services:
       - '~/.config:/root/.config'
       - '~/.local:/root/.local'
     entrypoint: ["python3"]
-    command: ["/root/.nanobot/evolution-webhook.py"]
+    command: ["/root/.nanobot/workspace/evolution-webhook.py"]
     restart: unless-stopped
 
   nanobot-gateway:
