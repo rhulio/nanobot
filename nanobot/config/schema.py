@@ -165,6 +165,15 @@ class QQConfig(Base):
     allow_from: list[str] = Field(default_factory=list)  # Allowed user openids (empty = public access)
 
 
+class EvolutionConfig(Base):
+    """Evolution API channel configuration using webhook."""
+
+    enabled: bool = False
+    port: int = 18791  # Webhook port
+    allow_from: list[str] = Field(default_factory=list)  # Allowed phone numbers
+    instances: dict[str, dict] = Field(default_factory=dict)  # Multiple instances support
+
+
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
 
@@ -177,6 +186,7 @@ class ChannelsConfig(Base):
     email: EmailConfig = Field(default_factory=EmailConfig)
     slack: SlackConfig = Field(default_factory=SlackConfig)
     qq: QQConfig = Field(default_factory=QQConfig)
+    evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)
 
 
 class AgentDefaults(Base):
