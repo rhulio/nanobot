@@ -131,7 +131,15 @@ class EvolutionChannel(BaseChannel):
         """Poll Evolution API periodically for new messages."""
         interval = self.config.poll_interval or 5
         self._running = True
-        logger.info(f"Evolution API polling started (interval={interval}s)")
+
+        if not self._instances:
+            logger.error("Evolution polling: no instances configured — check 'instances' in config")
+            return
+
+        logger.info(
+            f"Evolution API polling started (interval={interval}s, "
+            f"instances={list(self._instances.keys())})"
+        )
 
         # seen[instance_name][jid] = last messageTimestamp processed
         seen: dict[str, dict[str, int]] = {}
@@ -141,7 +149,7 @@ class EvolutionChannel(BaseChannel):
                 try:
                     await self._poll_instance(instance_name, instance_config, seen.setdefault(instance_name, {}))
                 except Exception as e:
-                    logger.error(f"Evolution poll error for instance {instance_name}: {e}")
+                    logger.error(f"Evolution poll error for instance {instance_name}: {e}", exc_info=True)
             await asyncio.sleep(interval)
 
     async def _poll_instance(
@@ -162,10 +170,15 @@ class EvolutionChannel(BaseChannel):
             or self.config.api_key or os.getenv("EVOLUTION_API_KEY", "")
         )
         if not api_url or not api_key:
+            logger.error(
+                f"Evolution polling: missing credentials for instance {instance_name} "
+                f"(api_url={'set' if api_url else 'MISSING'}, api_key={'set' if api_key else 'MISSING'})"
+            )
             return
 
         headers = {"apikey": api_key, "Content-Type": "application/json"}
         allowlist = instance_config.get("allow_from", self.config.allow_from)
+        logger.debug(f"Evolution polling {instance_name}: jids from allowlist={allowlist}")
 
         async with aiohttp.ClientSession() as session:
             # Get JIDs to poll: allowlist JIDs + recently active chats
